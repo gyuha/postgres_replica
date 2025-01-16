@@ -1,0 +1,141 @@
+version: '3'
+
+vars:
+  COMPOSE_FILE: docker-compose.yml
+  BACKUP_DIR: ./backups
+  DATA_DIR: ./data
+  SCRIPTS_DIR: ./scripts
+
+tasks:
+  init:
+    desc: Initialize directory structure and set permissions
+    cmds:
+      - mkdir -p {{.DATA_DIR}}/{primary,replica}
+      - mkdir -p {{.SCRIPTS_DIR}}/{primary,replica}
+      - mkdir -p {{.BACKUP_DIR}}
+      - chmod +x {{.SCRIPTS_DIR}}/replica/00-init.sh
+      - chmod 777 {{.DATA_DIR}}/primary {{.DATA_DIR}}/replica
+      - echo "Directory structure initialized"
+
+  start:
+    desc: Start PostgreSQL primary and replica servers
+    deps: [init]
+    cmds:
+      - docker-compose up -d
+      - task: wait-for-primary
+      - echo "PostgreSQL cluster is running"
+
+  stop:
+    desc: Stop PostgreSQL servers
+    cmds:
+      - docker-compose down
+      - echo "PostgreSQL cluster stopped"
+
+  restart:
+    desc: Restart PostgreSQL servers
+    cmds:
+      - task: stop
+      - task: start
+
+  clean:
+    desc: Clean up all data and containers
+    cmds:
+      - docker-compose down -v
+      - rm -rf {{.DATA_DIR}}/primary/* {{.DATA_DIR}}/replica/*
+      - echo "Clean up completed"
+
+  logs:
+    desc: Show logs from all containers
+    cmds:
+      - docker-compose logs -f
+
+  status:
+    desc: Check replication status
+    cmds:
+      - echo "Primary Status:"
+      - docker exec postgres_primary pg_isready
+      - echo "Replica Status:"
+      - docker exec postgres_replica pg_isready
+      - echo "Replication Status:"
+      - docker exec postgres_primary psql -U postgres -c "SELECT * FROM pg_stat_replication;"
+
+  backup:
+    desc: Backup both primary and replica databases
+    dir: '{{.BACKUP_DIR}}'
+    vars:
+      TIMESTAMP: '{{now | date "2006-01-02T15-04-05"}}'
+    cmds:
+      - mkdir -p primary replica
+      - echo "Backing up primary database..."
+      - docker exec postgres_primary pg_basebackup -D /tmp/backup -Ft -z -P
+      - docker cp postgres_primary:/tmp/backup/. primary/backup-{{.TIMESTAMP}}/
+      - echo "Backing up replica database..."
+      - docker exec postgres_replica pg_basebackup -D /tmp/backup -Ft -z -P
+      - docker cp postgres_replica:/tmp/backup/. replica/backup-{{.TIMESTAMP}}/
+      - echo "Backup completed at {{.TIMESTAMP}}"
+
+  restore:
+    desc: Restore database from backup
+    vars:
+      BACKUP_PATH: '{{.CLI_ARGS}}'
+    cmds:
+      - test -n "{{.BACKUP_PATH}}" || (echo "Please provide backup path" && exit 1)
+      - task: stop
+      - echo "Restoring from {{.BACKUP_PATH}}..."
+      - docker-compose up -d primary
+      - docker cp {{.BACKUP_PATH}} postgres_primary:/tmp/backup
+      - docker exec postgres_primary pg_restore -d postgres /tmp/backup
+      - echo "Restore completed"
+
+  wait-for-primary:
+    internal: true
+    cmds:
+      - |
+        echo "Waiting for primary server..."
+        for i in $(seq 1 30); do
+          if docker exec postgres_primary pg_isready >/dev/null 2>&1; then
+            echo "Primary server is ready"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "Primary server failed to start"
+        exit 1
+
+  monitor:
+    desc: Monitor replication lag and status
+    cmds:
+      - |
+        while true; do
+          clear
+          echo "=== Replication Status ==="
+          task: status
+          sleep 5
+        done
+
+  psql-primary:
+    desc: Connect to primary database with psql
+    cmds:
+      - docker exec -it postgres_primary psql -U postgres
+
+  psql-replica:
+    desc: Connect to replica database with psql
+    cmds:
+      - docker exec -it postgres_replica psql -U postgres
+
+  validate:
+    desc: Validate replication setup
+    cmds:
+      - echo "Validating primary server..."
+      - docker exec postgres_primary pg_isready
+      - echo "Validating replica server..."
+      - docker exec postgres_replica pg_isready
+      - echo "Checking replication status..."
+      - docker exec postgres_primary psql -U postgres -c "SELECT client_addr, state, sent_lsn, write_lsn, flush_lsn, replay_lsn FROM pg_stat_replication;"
+      - echo "Checking replica lag..."
+      - docker exec postgres_replica psql -U postgres -c "SELECT CASE WHEN pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn() THEN 0 ELSE EXTRACT (EPOCH FROM now() - pg_last_xact_replay_timestamp())::INT END AS lag;"
+
+  help:
+    desc: Show this help
+    cmds:
+      - task --list
