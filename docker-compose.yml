@@ -1,32 +1,53 @@
 services:
-  primary:
-    image: postgres:latest
+  postgres_primary:
+    image: postgres:15
     container_name: postgres_primary
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      REPLICATION_USER: ${REPLICATION_USER}
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD}
     ports:
       - "${POSTGRES_PRIMARY_PORT}:5432"
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB}
-      - PGDATA=/var/lib/postgresql/data/pgdata
     volumes:
-      - ./data/primary:/var/lib/postgresql/data/pgdata
-      - ./scripts/primary:/docker-entrypoint-initdb.d
-    restart: always
+      - ${HOST_PRIMARY_DATA}:${POSTGRES_PRIMARY_DATA}
+      - ./scripts/primary/postgresql.conf:/etc/postgresql/postgresql.conf
+      - ./scripts/primary/pg_hba.conf:/etc/postgresql/pg_hba.conf
+      - ./scripts/primary/init-primary.sh:/docker-entrypoint-initdb.d/init-primary.sh
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - postgres_network
 
-  replica:
-    image: postgres:latest
+  postgres_replica:
+    image: postgres:15
     container_name: postgres_replica
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      REPLICATION_USER: ${REPLICATION_USER}
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD}
+      PGDATA: ${POSTGRES_REPLICA_DATA}
     ports:
       - "${POSTGRES_REPLICA_PORT}:5432"
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB}
-      - PGDATA=/var/lib/postgresql/data/pgdata
     volumes:
-      - ./data/replica:/var/lib/postgresql/data/pgdata
-      - ./scripts/replica:/docker-entrypoint-initdb.d
+      - ${HOST_REPLICA_DATA}:${POSTGRES_REPLICA_DATA}
+      - ./scripts/replica/postgresql.conf:/etc/postgresql/postgresql.conf
+      - ./scripts/replica/pg_hba.conf:/etc/postgresql/pg_hba.conf
+      - ./scripts/replica/init-replica.sh:/docker-entrypoint.sh
+    entrypoint: ["/docker-entrypoint.sh"]
     depends_on:
-      - primary
-    restart: always
+      postgres_primary:
+        condition: service_healthy
+    networks:
+      - postgres_network
+
+networks:
+  postgres_network:
+    driver: bridge

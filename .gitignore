@@ -1,8 +1,5 @@
 # PostgreSQL Data
-data/primary/*
-data/replica/*
-!data/primary/.gitkeep
-!data/replica/.gitkeep
+data/*/
 
 # Backups
 backups/*
