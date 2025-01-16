@@ -2,34 +2,56 @@ version: '3'
 
 vars:
   COMPOSE_FILE: docker-compose.yml
-  BACKUP_DIR: ./backups
-  DATA_DIR: ./data
-  SCRIPTS_DIR: ./scripts
+  BACKUP_DIR: '{{if eq OS "windows"}}.\backups{{else}}./backups{{end}}'
+  DATA_DIR: '{{if eq OS "windows"}}.\data{{else}}./data{{end}}'
+  SCRIPTS_DIR: '{{if eq OS "windows"}}.\scripts{{else}}./scripts{{end}}'
 
 tasks:
   init:
     desc: Initialize directory structure and set permissions
     cmds:
-      - mkdir -p {{.DATA_DIR}}/{primary,replica}
-      - mkdir -p {{.SCRIPTS_DIR}}/{primary,replica}
-      - mkdir -p {{.BACKUP_DIR}}
-      - chmod +x {{.SCRIPTS_DIR}}/replica/00-init.sh
-      - chmod 777 {{.DATA_DIR}}/primary {{.DATA_DIR}}/replica
+      - task: ensure-dirs
+      - task: set-permissions
       - echo "Directory structure initialized"
+
+  ensure-dirs:  
+    internal: true  
+    cmds:  
+      - |  
+        {{if eq OS "windows"}}  
+          powershell.exe -NoProfile -Command "New-Item -ItemType Directory -Path '.\data\primary' -Force | Out-Null; Write-Host 'Created directory: .\data\primary'"  
+          powershell.exe -NoProfile -Command "New-Item -ItemType Directory -Path '.\data\replica' -Force | Out-Null; Write-Host 'Created directory: .\data\replica'"  
+          powershell.exe -NoProfile -Command "New-Item -ItemType Directory -Path '.\backups' -Force | Out-Null; Write-Host 'Created directory: .\backups'"  
+        {{else}}  
+          mkdir -p {{.DATA_DIR}}/{primary,replica} {{.SCRIPTS_DIR}}/{primary,replica} {{.BACKUP_DIR}}  
+        {{end}}  
+
+  set-permissions:  
+    internal: true  
+    cmds:  
+      - |  
+        {{if ne OS "windows"}}  
+          chmod +x {{.SCRIPTS_DIR}}/replica/00-init.sh  
+          chmod 777 {{.DATA_DIR}}/primary {{.DATA_DIR}}/replica  
+        {{end}}  
 
   start:
     desc: Start PostgreSQL primary and replica servers
     deps: [init]
     cmds:
-      - docker-compose up -d
-      - task: wait-for-primary
+      - docker compose up -d
       - echo "PostgreSQL cluster is running"
 
   stop:
     desc: Stop PostgreSQL servers
     cmds:
-      - docker-compose down
+      - docker compose down
       - echo "PostgreSQL cluster stopped"
+
+  down:
+    desc: Stop PostgreSQL servers (alias for stop)
+    cmds:
+      - task: stop
 
   restart:
     desc: Restart PostgreSQL servers
@@ -40,14 +62,46 @@ tasks:
   clean:
     desc: Clean up all data and containers
     cmds:
-      - docker-compose down -v
-      - rm -rf {{.DATA_DIR}}/primary/* {{.DATA_DIR}}/replica/*
+      - docker compose down -v
+      - |
+        {{if eq OS "windows"}}
+          powershell -NoProfile -Command "
+          if (Test-Path '{{.DATA_DIR}}') {
+            Remove-Item '{{.DATA_DIR}}' -Recurse -Force
+            Write-Host 'Removed {{.DATA_DIR}}'
+          }
+          New-Item -ItemType Directory -Path '{{.DATA_DIR}}' -Force
+          Write-Host 'Created new {{.DATA_DIR}}'
+          "
+        {{else}}
+          rm -rf {{.DATA_DIR}}/primary/* {{.DATA_DIR}}/replica/*
+        {{end}}
       - echo "Clean up completed"
 
   logs:
     desc: Show logs from all containers
     cmds:
-      - docker-compose logs -f
+      - docker compose logs -f
+
+  logs-primary:
+    desc: Show logs from primary container
+    cmds:
+      - docker logs -f postgres_primary
+
+  logs-replica:
+    desc: Show logs from replica container
+    cmds:
+      - docker logs -f postgres_replica
+
+  attach-primary:
+    desc: Attach to primary PostgreSQL container
+    cmds:
+      - docker exec -it postgres_primary psql -U postgres
+
+  attach-replica:
+    desc: Attach to replica PostgreSQL container
+    cmds:
+      - docker exec -it postgres_replica psql -U postgres
 
   status:
     desc: Check replication status
@@ -65,7 +119,20 @@ tasks:
     vars:
       TIMESTAMP: '{{now | date "2006-01-02T15-04-05"}}'
     cmds:
-      - mkdir -p primary replica
+      - |
+        {{if eq OS "windows"}}
+        powershell -Command "
+        $dirs = @('primary', 'replica')
+        foreach ($dir in $dirs) {
+          if (-not (Test-Path $dir)) {
+            New-Item -ItemType Directory -Path $dir -Force
+            Write-Host \"Created directory: $dir\"
+          }
+        }
+        "
+        {{else}}
+        mkdir -p primary replica
+        {{end}}
       - echo "Backing up primary database..."
       - docker exec postgres_primary pg_basebackup -D /tmp/backup -Ft -z -P
       - docker cp postgres_primary:/tmp/backup/. primary/backup-{{.TIMESTAMP}}/
@@ -74,68 +141,34 @@ tasks:
       - docker cp postgres_replica:/tmp/backup/. replica/backup-{{.TIMESTAMP}}/
       - echo "Backup completed at {{.TIMESTAMP}}"
 
-  restore:
-    desc: Restore database from backup
-    vars:
-      BACKUP_PATH: '{{.CLI_ARGS}}'
-    cmds:
-      - test -n "{{.BACKUP_PATH}}" || (echo "Please provide backup path" && exit 1)
-      - task: stop
-      - echo "Restoring from {{.BACKUP_PATH}}..."
-      - docker-compose up -d primary
-      - docker cp {{.BACKUP_PATH}} postgres_primary:/tmp/backup
-      - docker exec postgres_primary pg_restore -d postgres /tmp/backup
-      - echo "Restore completed"
-
-  wait-for-primary:
-    internal: true
-    cmds:
-      - |
-        echo "Waiting for primary server..."
-        for i in $(seq 1 30); do
-          if docker exec postgres_primary pg_isready >/dev/null 2>&1; then
-            echo "Primary server is ready"
-            exit 0
-          fi
-          sleep 1
-        done
-        echo "Primary server failed to start"
-        exit 1
-
   monitor:
     desc: Monitor replication lag and status
     cmds:
       - |
+        {{if eq OS "windows"}}
+        powershell -NoProfile -Command "
+        while ($true) {
+          Clear-Host
+          Write-Host '=== Replication Status ==='
+          task status
+          Start-Sleep -Seconds 5
+        }
+        "
+        {{else}}
         while true; do
           clear
           echo "=== Replication Status ==="
-          task: status
+          task status
           sleep 5
         done
-
-  psql-primary:
-    desc: Connect to primary database with psql
-    cmds:
-      - docker exec -it postgres_primary psql -U postgres
-
-  psql-replica:
-    desc: Connect to replica database with psql
-    cmds:
-      - docker exec -it postgres_replica psql -U postgres
-
-  validate:
-    desc: Validate replication setup
-    cmds:
-      - echo "Validating primary server..."
-      - docker exec postgres_primary pg_isready
-      - echo "Validating replica server..."
-      - docker exec postgres_replica pg_isready
-      - echo "Checking replication status..."
-      - docker exec postgres_primary psql -U postgres -c "SELECT client_addr, state, sent_lsn, write_lsn, flush_lsn, replay_lsn FROM pg_stat_replication;"
-      - echo "Checking replica lag..."
-      - docker exec postgres_replica psql -U postgres -c "SELECT CASE WHEN pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn() THEN 0 ELSE EXTRACT (EPOCH FROM now() - pg_last_xact_replay_timestamp())::INT END AS lag;"
+        {{end}}
 
   help:
+    desc: Show this help
+    cmds:
+      - task --list
+
+  default:
     desc: Show this help
     cmds:
       - task --list
