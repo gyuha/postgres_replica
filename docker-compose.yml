@@ -1,0 +1,34 @@
+version: "3.9"
+
+services:
+  primary:
+    image: postgres:latest
+    container_name: postgres_primary
+    ports:
+      - "${POSTGRES_PRIMARY_PORT}:5432"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - ./data/primary:/var/lib/postgresql/data/pgdata
+      - ./scripts/primary:/docker-entrypoint-initdb.d
+    restart: always
+
+  replica:
+    image: postgres:latest
+    container_name: postgres_replica
+    ports:
+      - "${POSTGRES_REPLICA_PORT}:5432"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - ./data/replica:/var/lib/postgresql/data/pgdata
+      - ./scripts/replica:/docker-entrypoint-initdb.d
+    depends_on:
+      - primary
+    restart: always
