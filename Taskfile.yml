@@ -1,4 +1,9 @@
+
 version: '3'
+
+# .env 파일에서 환경 변수 로드
+dotenv: ['.env']
+
 
 vars:
   VOLUME_DIR: data
@@ -129,26 +134,28 @@ tasks:
         docker ps --format "table {{.Names}}\t{{.Status}}"
         
         echo "\nPostgreSQL 상태 확인:"
-        if docker exec pg1 pg_isready -U postgres 2>/dev/null; then
+        if docker exec pg1 pg_isready -U ${POSTGRESQL_USERNAME} 2>/dev/null; then
           echo "Primary (pg1): 정상"
         else
           echo "Primary (pg1): 비정상"
         fi
         
-        if docker exec pg2 pg_isready -U postgres 2>/dev/null; then
+        if docker exec pg2 pg_isready -U ${POSTGRESQL_USERNAME} 2>/dev/null; then
           echo "Replica1 (pg2): 정상"
         else
           echo "Replica1 (pg2): 비정상"
         fi
         
-        if docker exec pg3 pg_isready -U postgres 2>/dev/null; then
+        if docker exec pg3 pg_isready -U ${POSTGRESQL_USERNAME} 2>/dev/null; then
           echo "Replica2 (pg3): 정상"
         else
           echo "Replica2 (pg3): 비정상"
         fi
-        
+
+
         echo "\n복제 상태 확인:"
-        docker exec -it -e PGPASSWORD=mysecretpassword pg1 psql -U postgres -c "SELECT * FROM pg_stat_replication;" 2>/dev/null
+        docker exec -it -e PGPASSWORD=${POSTGRESQL_PASSWORD} pg1 psql -U ${POSTGRESQL_USERNAME} -c "SELECT * FROM pg_stat_replication;" 2>/dev/null
+        
 
   help:
     desc: Show this help
