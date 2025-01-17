@@ -1,256 +1,140 @@
-# PostgreSQL Replication Setup
+# PostgreSQL 복제 및 로드밸런싱 설정
 
-A PostgreSQL Primary-Replica replication setup using Docker Compose with automated task management.
+Docker Compose를 사용한 PostgreSQL 프라이머리-레플리카 복제 및 PgCat을 이용한 로드밸런싱 설정입니다.
 
-## Table of Contents
+## 목차
 
-- [Requirements](#requirements)
-- [Directory Structure](#directory-structure)
-- [Getting Started](#getting-started)
-- [Task Commands](#task-commands)
-- [Configuration Details](#configuration-details)
-- [Monitoring](#monitoring)
-- [Backup and Restore](#backup-and-restore)
-- [Troubleshooting](#troubleshooting)
+- [PostgreSQL 복제 및 로드밸런싱 설정](#postgresql-복제-및-로드밸런싱-설정)
+  - [목차](#목차)
+  - [요구사항](#요구사항)
+  - [디렉토리 구조](#디렉토리-구조)
+  - [시작하기](#시작하기)
+  - [Task 명령어](#task-명령어)
+    - [기본 작업](#기본-작업)
+    - [모니터링 및 디버깅](#모니터링-및-디버깅)
+  - [구성 상세](#구성-상세)
+    - [환경 변수 (.env)](#환경-변수-env)
+    - [네트워크 구성](#네트워크-구성)
+  - [모니터링](#모니터링)
+    - [복제 상태 확인](#복제-상태-확인)
+    - [서비스 접속](#서비스-접속)
 
-## Requirements
+## 요구사항
 
 - [Docker](https://docs.docker.com/get-docker/)
 - [Docker Compose](https://docs.docker.com/compose/install/)
-- [Task](https://taskfile.dev/#/installation) - A task runner / simpler Make alternative
-- [Git](https://git-scm.com/downloads)
+- [Task](https://taskfile.dev/#/installation)
 
-## Directory Structure
+## 디렉토리 구조
 
 ```
 .
-├── docker-compose.yml     # Docker Compose configuration
-├── .env                   # Environment variables
-├── Taskfile.yml          # Task automation scripts
-├── data/                 # Data storage
-│   ├── primary/         # Primary database data
-│   └── replica/         # Replica database data
-├── scripts/             # Initialization scripts
-│   ├── primary/        # Primary configuration scripts
-│   └── replica/        # Replica configuration scripts
-└── backups/            # Backup storage
+├── docker-compose.yml     # Docker Compose 설정
+├── .env                   # 환경 변수
+├── Taskfile.yml          # Task 자동화 스크립트
+├── data/                 # 데이터 저장소
+│   ├── pg1/             # 프라이머리 데이터
+│   ├── pg2/             # 레플리카1 데이터
+│   └── pg3/             # 레플리카2 데이터
+└── config/              # 설정 파일
+    └── pgcat.simple.toml  # PgCat 설정
 ```
 
-## Getting Started
+## 시작하기
 
-1. Clone the repository
+1. 저장소 복제
 ```bash
 git clone <repository-url>
 cd <repository-name>
 ```
 
-2. Set up environment variables
+2. 환경 변수 설정
 ```bash
 cp .env.example .env
-# Modify .env file according to your needs
+# 필요에 따라 .env 파일 수정
 ```
 
-3. Initialize and start
+3. 시작
 ```bash
-# Create directory structure and set permissions
+# 디렉토리 구조 생성 및 권한 설정
 task init
 
-# Start PostgreSQL cluster
+# PostgreSQL 클러스터 시작
 task start
 ```
 
-## Task Commands
+## Task 명령어
 
-### Basic Operations
+### 기본 작업
 
-| Command | Description | Example |
+| 명령어 | 설명 | 예시 |
 |---------|-------------|----------|
-| `task init` | Initialize directory structure and set permissions | `task init` |
-| `task start` | Start PostgreSQL cluster | `task start` |
-| `task stop` | Stop PostgreSQL cluster | `task stop` |
-| `task restart` | Restart PostgreSQL cluster | `task restart` |
-| `task status` | Check replication status | `task status` |
+| `task init` | 디렉토리 구조 생성 및 권한 설정 | `task init` |
+| `task start` | PostgreSQL 클러스터 시작 | `task start` |
+| `task stop` | PostgreSQL 클러스터 중지 | `task stop` |
+| `task restart` | PostgreSQL 클러스터 재시작 | `task restart` |
+| `task status` | 복제 상태 확인 | `task status` |
 
-### Monitoring and Debugging
+### 모니터링 및 디버깅
 
-| Command | Description | Example |
+| 명령어 | 설명 | 예시 |
 |---------|-------------|----------|
-| `task logs` | View container logs | `task logs` |
-| `task monitor` | Monitor replication status in real-time | `task monitor` |
-| `task validate` | Validate replication setup | `task validate` |
-| `task psql-primary` | Connect to Primary DB | `task psql-primary` |
-| `task psql-replica` | Connect to Replica DB | `task psql-replica` |
+| `task logs [서비스명]` | 컨테이너 로그 확인 | `task logs pg1` |
+| `task sh [서비스명]` | 컨테이너 쉘 접속 | `task sh pg1` |
 
-### Backup and Restore
+## 구성 상세
 
-| Command | Description | Example |
-|---------|-------------|----------|
-| `task backup` | Backup entire database | `task backup` |
-| `task restore` | Restore from backup | `task restore ./backups/primary/backup-2024-01-16T10-30-00` |
-
-### Maintenance
-
-| Command | Description | Example |
-|---------|-------------|----------|
-| `task clean` | Clean all data and containers | `task clean` |
-| `task help` | Show available commands | `task help` |
-
-## Configuration Details
-
-### Environment Variables (.env)
+### 환경 변수 (.env)
 
 ```env
-# PostgreSQL Basic Settings
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=postgres_password
-POSTGRES_DB=mydb
+# PostgreSQL 설정
+TZ=Asia/Seoul
+POSTGRESQL_USERNAME=postgres
+POSTGRESQL_DATABASE=postgres
+POSTGRESQL_PASSWORD=mysecretpassword
 
-# Port Settings
-POSTGRES_PRIMARY_PORT=5432
-POSTGRES_REPLICA_PORT=5433
+# 복제 설정
+POSTGRESQL_REPLICATION_USER=repl_user
+POSTGRESQL_REPLICATION_PASSWORD=repl_password
 
-# Replication User Settings
-REPLICA_USER=replicator
-REPLICA_PASSWORD=replicator_password
+# 포트 설정
+PGCAT_PORT=6432
+PGCAT_ADMIN_PORT=9930
+PG1_PORT=5433
+PG2_PORT=5434
+PG3_PORT=5435
 ```
 
-### Network Configuration
+### 네트워크 구성
 
-- Primary and Replica communicate through a dedicated bridge network named `postgres_network`
-- Services are accessible within the network using hostnames:
-  - Primary: `primary`
-  - Replica: `replica`
+- 모든 서비스는 Docker Compose 네트워크를 통해 통신
+- 서비스 호스트명:
+  - 프라이머리: `pg1`
+  - 레플리카1: `pg2`
+  - 레플리카2: `pg3`
+  - 로드밸런서: `pgcat`
 
-## Monitoring
+## 모니터링
 
-### Check Replication Status
+### 복제 상태 확인
 
 ```bash
-# Check replication status
+# 복제 상태 확인
 task status
 
-# Real-time monitoring
-task monitor
+# 특정 서비스의 로그 확인
+task logs pg1
+task logs pg2
+task logs pg3
+task logs pgcat
 ```
 
-### View Logs
+### 서비스 접속
 
 ```bash
-# View all logs
-task logs
-
-# View specific service logs
-docker-compose logs primary
-docker-compose logs replica
+# 서비스 쉘 접속
+task sh pg1    # 프라이머리 접속
+task sh pg2    # 레플리카1 접속
+task sh pg3    # 레플리카2 접속
+task sh pgcat  # PgCat 접속
 ```
-
-## Backup and Restore
-
-### Create Backup
-
-```bash
-# Perform full backup
-task backup
-```
-
-Backups are stored in the `./backups` directory with timestamps.
-
-### Restore from Backup
-
-```bash
-# Restore from specific backup
-task restore ./backups/primary/backup-[TIMESTAMP]
-```
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Replication Not Working**
-   ```bash
-   # Check replication status
-   task validate
-   
-   # Check logs
-   task logs
-   ```
-
-2. **Containers Not Starting**
-   ```bash
-   # Check container status
-   docker-compose ps
-   
-   # Check logs
-   task logs
-   ```
-
-3. **Replication Lag**
-   ```bash
-   # Monitor replication lag
-   task monitor
-   ```
-
-### Troubleshooting Steps
-
-1. Check logs
-2. Validate replication status
-3. Verify network connectivity
-4. Restart services if necessary
-
-## Related Documentation
-
-- [Task Documentation](https://taskfile.dev/#/)
-- [Task GitHub Repository](https://github.com/go-task/task)
-- [PostgreSQL Documentation](https://www.postgresql.org/docs/)
-- [Docker Documentation](https://docs.docker.com/)
-- [Docker Compose Documentation](https://docs.docker.com/compose/)
-
-## Task Installation
-
-### macOS
-```bash
-# Using Homebrew
-brew install go-task/tap/go-task
-
-# Using MacPorts
-sudo port install go-task
-```
-
-### Linux
-```bash
-# Using Snap
-sudo snap install task --classic
-
-# Using Homebrew
-brew install go-task/tap/go-task
-
-# Direct download
-sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b ~/.local/bin
-```
-
-### Windows
-```powershell
-# Using Scoop
-scoop install task
-
-# Using Chocolatey
-choco install go-task
-```
-
-## License
-
-[Add License Information]
-
-## Contributing
-
-[Add Contributing Guidelines]
-
-## Acknowledgments
-
-- [Task](https://taskfile.dev) - Task runner / build tool
-- [PostgreSQL](https://www.postgresql.org/) - Open source database
-- [Docker](https://www.docker.com/) - Container platform
-
----
-
-For more detailed information about Task usage and features, visit the [Task documentation](https://taskfile.dev/#/).

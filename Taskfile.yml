@@ -34,25 +34,33 @@ vars:
       esac
 
 tasks:
-  start:
+  up:
     desc: PostgreSQL 클러스터 시작
     cmds:
-      - '{{.MKDIR_CMD}} "{{.VOLUME_DIR}}/primary"'
-      - '{{.MKDIR_CMD}} "{{.VOLUME_DIR}}/replica"'
       - '{{.CHMOD_CMD}}'
       - docker compose down -v
       - docker compose up -d
       - task: wait-for-db
 
-  stop:
+  start:
+    desc: PostgreSQL 클러스터 시작 (alias up)
+    cmds:
+      - task: up
+
+  down:
     desc: PostgreSQL 클러스터 중단
     cmds:
-      - docker compose down
+      - docker compose down -v
+  
+  stop:
+    desc: PostgreSQL 클러스터 중단 (alias down)
+    cmds:
+      - task: down
 
   clean:
     desc: 데이터 폴더 삭제
     cmds:
-      - docker compose down -v
+      - task: down
       - '{{.RM_CMD}} "{{.VOLUME_DIR}}"'
 
   wait-for-db:
@@ -62,7 +70,7 @@ tasks:
       - |
         echo "Waiting for Primary DB..."
         for i in {1..30}; do
-          if docker exec postgres_primary pg_isready -U postgres > /dev/null 2>&1; then
+          if docker exec pg1 pg_isready -U postgres > /dev/null 2>&1; then
             echo "Primary DB is ready!"
             break
           fi
@@ -72,7 +80,7 @@ tasks:
       - |
         echo "Waiting for Replica DB..."
         for i in {1..30}; do
-          if docker exec postgres_replica pg_isready -U postgres > /dev/null 2>&1; then
+          if docker exec pg2 pg_isready -U postgres > /dev/null 2>&1; then
             echo "Replica DB is ready!"
             break
           fi
@@ -89,39 +97,58 @@ tasks:
       - docker compose exec replica psql -U postgres -c "\l"
 
   logs:
-    desc: 모든 컨테이너 로그 출력
+    desc: 특정 서비스의 로그를 출력 - 사용법 / task logs -- [서비스명]
     cmds:
-      - docker compose logs -f
-
-  primary-logs:
-    desc: Primary 노드 로그 출력
+      - cmd: |
+          SERVICE="{{.CLI_ARGS}}"
+          if [ -z "$SERVICE" ]; then
+            echo "모든 서비스의 로그를 출력합니다..."
+            docker compose logs -f
+          else
+            echo "$SERVICE 서비스의 로그를 출력합니다..."
+            docker compose logs -f {{.CLI_ARGS}}
+          fi
+  
+  sh:
+    desc: 특정 서비스의 쉘 접속 - 사용법 / task sh -- [서비스명]
     cmds:
-      - docker compose logs -f primary
-
-  replica-logs:
-    desc: Replica 노드 로그 출력
-    cmds:
-      - docker compose logs -f replica
+      - cmd: |
+          SERVICE="{{.CLI_ARGS}}"
+          if [ -z "$SERVICE" ]; then
+            echo "서비스명을 입력해주세요"
+          else
+            echo "$SERVICE 서비스의 쉘을 접속합니다..."
+            docker compose exec -it {{.CLI_ARGS}} bash
+          fi
 
   status:
-    desc: Check replication status
+    desc: PostgreSQL 클러스터 상태 확인
     cmds:
-      - echo "Primary Status:"
-      - docker exec postgres_primary pg_isready
-      - echo "Replica Status:"
-      - docker exec postgres_replica pg_isready
-      - echo "Replication Status:"
-      - docker exec postgres_primary psql -U postgres -c "SELECT * FROM pg_stat_replication;"
-
-  primary-sh:
-    desc: Primary 노드 쉘 접속
-    cmds:
-      - docker compose exec primary bash
-
-  replica-sh:
-    desc: Replica 노드 쉘 접속
-    cmds:
-      - docker compose exec replica bash
+      - |
+        echo "컨테이너 상태 확인:"
+        docker ps --format "table {{.Names}}\t{{.Status}}"
+        
+        echo "\nPostgreSQL 상태 확인:"
+        if docker exec pg1 pg_isready -U postgres 2>/dev/null; then
+          echo "Primary (pg1): 정상"
+        else
+          echo "Primary (pg1): 비정상"
+        fi
+        
+        if docker exec pg2 pg_isready -U postgres 2>/dev/null; then
+          echo "Replica1 (pg2): 정상"
+        else
+          echo "Replica1 (pg2): 비정상"
+        fi
+        
+        if docker exec pg3 pg_isready -U postgres 2>/dev/null; then
+          echo "Replica2 (pg3): 정상"
+        else
+          echo "Replica2 (pg3): 비정상"
+        fi
+        
+        echo "\n복제 상태 확인:"
+        docker exec -it -e PGPASSWORD=mysecretpassword pg1 psql -U postgres -c "SELECT * FROM pg_stat_replication;" 2>/dev/null
 
   help:
     desc: Show this help

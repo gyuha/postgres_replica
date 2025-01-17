@@ -1,0 +1,130 @@
+#
+# PgCat 설정 예시
+# https://postgresml.org/docs/product/pgcat/features#sharding
+#
+
+#
+# 일반 풀러 설정
+[general]
+# 실행할 IP 주소, 0.0.0.0은 모든 곳에서 접근 가능함을 의미
+host = "0.0.0.0"
+
+# 실행할 포트, 이 예시에서는 PgBouncer와 동일한 포트 사용
+port = 6432
+
+# Prometheus 익스포터 활성화 여부
+enable_prometheus_exporter = true
+
+# Prometheus 익스포터가 수신 대기할 포트
+prometheus_exporter_port = 9930
+
+# 서버 연결 중단 전 대기 시간 (밀리초)
+connect_timeout = 5000
+
+# `SELECT 1` 상태 확인 쿼리의 결과 대기 시간 (밀리초)
+healthcheck_timeout = 1000
+
+# 상태 확인 쿼리 없이 즉시 재사용을 위해 연결을 유지하는 시간
+healthcheck_delay = 30000
+
+# 종료 시 클라이언트 연결 강제 종료 전 대기 시간 (밀리초)
+shutdown_timeout = 60000
+
+# 상태 확인 실패 시 서버 차단 시간 (초)
+ban_time = 60 # 초
+
+# 클라이언트 연결 로깅 여부
+log_client_connections = false
+
+# 클라이언트 연결 해제 로깅 여부
+log_client_disconnections = false
+
+# TLS 설정
+# tls_certificate = "server.cert"
+# tls_private_key = "server.key"
+
+# 가상 관리 데이터베이스(pgbouncer 또는 pgcat) 접근 자격 증명
+# 이 데이터베이스에 연결하면 `SHOW POOLS`, `SHOW DATABASES` 등의 명령을 실행할 수 있음
+admin_username = "pgcat"
+admin_password = "mysecretpassword"
+
+# 풀 설정
+# 설정은 pool.<pool_name> 구조로 되어있음
+# pool_name은 클라이언트가 연결할 때 데이터베이스 이름으로 사용
+# 아래 예시의 경우 클라이언트는 "postgres://sharding_user:sharding_user@pgcat_host:pgcat_port/sharded"로 연결 가능
+[pools.postgres]
+# 풀 모드 (자세한 내용은 PgBouncer 문서 참조)
+# session: 연결된 클라이언트당 하나의 서버 연결
+# transaction: 클라이언트 트랜잭션당 하나의 서버 연결
+pool_mode = "transaction"
+
+# 클라이언트가 지정하지 않은 경우,
+# 기본적으로 이 역할로 트래픽 라우팅
+#
+# any: 프라이머리와 레플리카 간 라운드로빈
+# replica: 프라이머리를 제외한 레플리카 간 라운드로빈
+# primary: 별도 지정이 없는 한 모든 쿼리는 프라이머리로 전달
+default_role = "any"
+
+# 쿼리 파서. 활성화하면 모든 들어오는 쿼리를 분석하여
+# 읽기 또는 쓰기 쿼리인지 판단
+# 읽기 쿼리는 레플리카로, 쓰기 쿼리는 프라이머리로 전달
+query_parser_enabled = true
+
+# 쿼리 파서가 활성화되고 이 설정이 활성화된 경우,
+# 쿼리 자체에서 역할을 유추하려고 시도
+query_parser_read_write_splitting = true
+
+# 쿼리 파서가 활성화되고 이 설정이 활성화된 경우, 프라이머리도 읽기 쿼리의
+# 로드 밸런싱에 사용되는 데이터베이스 풀에 포함됨. 그렇지 않으면 프라이머리는
+# 쓰기 쿼리에만 사용됨
+primary_reads_enabled = false
+
+# 다른 해싱 함수를 구현하거나 이미 구현한 해싱 함수를
+# 이 풀러에서 사용하고 싶다면?
+#
+# 현재 옵션:
+#
+# pg_bigint_hash: PARTITION BY HASH (Postgres 해싱 함수)
+# sha1: SHA1 기반 해싱 함수
+#
+sharding_function = "pg_bigint_hash"
+
+# 이 클러스터에 연결할 수 있는 사용자 자격 증명
+[pools.postgres.users.0]
+username = "postgres"
+password = "mysecretpassword"
+# 이 사용자에 대해 설정할 수 있는 최대 서버 연결 수
+# 클러스터의 모든 데이터베이스에 대한 단일 Pgcat 프로세스의 최대 연결 수는
+# 모든 사용자의 pool_size 합계
+pool_size = 9
+
+# 최대 쿼리 실행 시간. 위험하지만 명확하지 않은 방식으로 죽은 DB를 보호
+statement_timeout = 0
+
+# 샤드 0
+[pools.postgres.shards.0]
+# [ 호스트, 포트, 역할 ]
+servers = [
+    [ "pg1", 5432, "primary" ],
+    [ "pg2", 5432, "replica" ],
+    [ "pg3", 5432, "replica" ]
+]
+# 데이터베이스 이름 (예: "postgres")
+database = "postgres"
+
+[pools.postgres.shards.1]
+servers = [
+    [ "pg1", 5432, "primary" ],
+    [ "pg2", 5432, "replica" ],
+    [ "pg3", 5432, "replica" ]
+]
+database = "postgres"
+
+[pools.postgres.shards.2]
+servers = [
+    [ "pg1", 5432, "primary" ],
+    [ "pg2", 5432, "replica" ],
+    [ "pg3", 5432, "replica" ]
+]
+database = "postgres"

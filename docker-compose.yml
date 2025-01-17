@@ -1,46 +1,162 @@
+# PostgreSQL 컨테이너를 위한 환경 변수
+x-default-pg-env: &default-pg-env
+  # 환경 변수를 .env 파일에서 가져옴
+  TZ: ${TZ}
+  POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME}
+  POSTGRESQL_DATABASE: ${POSTGRESQL_DATABASE}
+  POSTGRESQL_PASSWORD: ${POSTGRESQL_PASSWORD}
+
+# PostgreSQL 컨테이너 실행을 위한 서비스 정의
 services:
-  primary:
-    image: postgres:15
-    container_name: postgres_primary
+  # pgcat 서비스
+  pgcat:
+    # GitHub 컨테이너 레지스트리의 Docker 이미지 사용
+    image: ghcr.io/postgresml/pgcat
+    # 컨테이너 이름 설정
+    container_name: pgcat
+    # 명시적으로 중지하지 않는 한 컨테이너 재시작
+    restart: unless-stopped
+    # 컨테이너의 환경 변수 설정
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_REPLICATION_USER: ${POSTGRES_REPLICATION_USER}
-      POSTGRES_REPLICATION_PASSWORD: ${POSTGRES_REPLICATION_PASSWORD}
+      <<: *default-pg-env
+    # 컨테이너 포트를 호스트 포트에 매핑
     ports:
-      - "${POSTGRES_PORT_PRIMARY}:5432"
+      - "${PGCAT_PORT}:6432"
+      - "${PGCAT_ADMIN_PORT}:9930"
+    # 컨테이너의 의존성 정의
+    depends_on:
+      pg1:
+        condition: service_healthy
+      pg2:
+        condition: service_started
+      pg3:
+        condition: service_started
+    # 컨테이너의 볼륨 마운트
     volumes:
-      - ./data/primary:/var/lib/postgresql/data
-      - ./config/primary/postgresql.conf:/var/lib/postgresql/data/postgresql.conf
-      - ./config/primary/pg_hba.conf:/var/lib/postgresql/data/pg_hba.conf
-      - ./scripts/primary/init.sh:/docker-entrypoint-initdb.d/init.sh
+      - ./config/pgcat.simple.toml:/etc/pgcat/pgcat.toml
+
+  # pg1 서비스
+  pg1:
+    # Bitnami 저장소의 Docker 이미지 사용
+    image: bitnami/postgresql:16
+    # 컨테이너 이름 설정
+    container_name: pg1
+    # 명시적으로 중지하지 않는 한 컨테이너 재시작
+    restart: unless-stopped
+    # 컨테이너의 환경 변수 설정
+    environment:
+      <<: *default-pg-env
+      # PG의 읽기/쓰기 감사 활성화
+      POSTGRESQL_PGAUDIT_LOG: READ,WRITE
+      # PostgreSQL 서버의 호스트 이름 로깅
+      POSTGRESQL_LOG_HOSTNAME: true
+      # 복제 모드를 마스터로 설정
+      POSTGRESQL_REPLICATION_MODE: master
+      # 복제 사용자 이름과 비밀번호 설정
+      POSTGRESQL_REPLICATION_USER: ${POSTGRESQL_REPLICATION_USER}
+      POSTGRESQL_REPLICATION_PASSWORD: ${POSTGRESQL_REPLICATION_PASSWORD}
+    # 컨테이너 포트를 호스트 포트에 매핑
+    ports:
+      - "127.0.0.1:${PG1_PORT}:5432"
+    # 컨테이너의 볼륨 마운트
+    volumes:
+      - ./data/pg1:/var/lib/postgresql/data
+    # 컨테이너의 상태 검사 정의
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $$POSTGRESQL_USERNAME -d $$POSTGRESQL_DATABASE",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  replica:
-    image: postgres:15
-    container_name: postgres_replica
+  # pg2 서비스
+  pg2:
+    # Bitnami 저장소의 Docker 이미지 사용
+    image: bitnami/postgresql:16
+    # 컨테이너 이름 설정
+    container_name: pg2
+    # 명시적으로 중지하지 않는 한 컨테이너 재시작
+    restart: unless-stopped
+    # 컨테이너의 환경 변수 설정
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_REPLICATION_USER: ${POSTGRES_REPLICATION_USER}
-      POSTGRES_REPLICATION_PASSWORD: ${POSTGRES_REPLICATION_PASSWORD}
+      <<: *default-pg-env
+      # PG의 읽기/쓰기 감사 활성화
+      POSTGRESQL_PGAUDIT_LOG: READ,WRITE
+      # PostgreSQL 서버의 호스트 이름 로깅
+      POSTGRESQL_LOG_HOSTNAME: true
+      # 복제 모드를 슬레이브로 설정
+      POSTGRESQL_REPLICATION_MODE: slave
+      # 복제 사용자 이름과 비밀번호 설정
+      POSTGRESQL_REPLICATION_USER: ${POSTGRESQL_REPLICATION_USER}
+      POSTGRESQL_REPLICATION_PASSWORD: ${POSTGRESQL_REPLICATION_PASSWORD}
+      # 마스터 호스트와 포트 설정
+      POSTGRESQL_MASTER_HOST: pg1
+      POSTGRESQL_MASTER_PORT_NUMBER: 5432
+    # 컨테이너 포트를 호스트 포트에 매핑
     ports:
-      - "${POSTGRES_PORT_REPLICA}:5432"
+      - "127.0.0.1:${PG2_PORT}:5432"
+    # 컨테이너의 볼륨 마운트
     volumes:
-      - ./data/replica:/var/lib/postgresql/data
-      - ./config/replica/postgresql.conf:/var/lib/postgresql/data/postgresql.conf
-      - ./config/replica/pg_hba.conf:/var/lib/postgresql/data/pg_hba.conf
-      - ./scripts/replica/init.sh:/docker-entrypoint-initdb.d/init.sh
+      - ./data/pg2:/var/lib/postgresql/data
+    # 컨테이너의 의존성 정의
     depends_on:
-      primary:
+      pg1:
         condition: service_healthy
+    # 컨테이너의 상태 검사 정의
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $$POSTGRESQL_USERNAME -d $$POSTGRESQL_DATABASE",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-networks:
-  default:
-    driver: bridge 
+  # pg3 서비스
+  pg3:
+    # Bitnami 저장소의 Docker 이미지 사용
+    image: bitnami/postgresql:16
+    # 컨테이너 이름 설정
+    container_name: pg3
+    # 명시적으로 중지하지 않는 한 컨테이너 재시작
+    restart: unless-stopped
+    # 컨테이너의 환경 변수 설정
+    environment:
+      <<: *default-pg-env
+      # PG의 읽기/쓰기 감사 활성화
+      POSTGRESQL_PGAUDIT_LOG: READ,WRITE
+      # PostgreSQL 서버의 호스트 이름 로깅
+      POSTGRESQL_LOG_HOSTNAME: true
+      # 복제 모드를 슬레이브로 설정
+      POSTGRESQL_REPLICATION_MODE: slave
+      # 복제 사용자 이름과 비밀번호 설정
+      POSTGRESQL_REPLICATION_USER: ${POSTGRESQL_REPLICATION_USER}
+      POSTGRESQL_REPLICATION_PASSWORD: ${POSTGRESQL_REPLICATION_PASSWORD}
+      # 마스터 호스트와 포트 설정
+      POSTGRESQL_MASTER_HOST: pg1
+      POSTGRESQL_MASTER_PORT_NUMBER: 5432
+    # 컨테이너 포트를 호스트 포트에 매핑
+    ports:
+      - "127.0.0.1:${PG3_PORT}:5432"
+    # 컨테이너의 볼륨 마운트
+    volumes:
+      - ./data/pg3:/var/lib/postgresql/data
+    # 컨테이너의 의존성 정의
+    depends_on:
+      pg1:
+        condition: service_healthy
+    # 컨테이너의 상태 검사 정의
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $$POSTGRESQL_USERNAME -d $$POSTGRESQL_DATABASE",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  
