@@ -1,107 +1,107 @@
 version: '3'
 
 vars:
-  COMPOSE_FILE: docker-compose.yml
-  BACKUP_DIR: '{{if eq OS "windows"}}.\backups{{else}}./backups{{end}}'
-  DATA_DIR: '{{if eq OS "windows"}}.\data{{else}}./data{{end}}'
-  SCRIPTS_DIR: '{{if eq OS "windows"}}.\scripts{{else}}./scripts{{end}}'
+  VOLUME_DIR: data
+  RM_CMD:
+    sh: |
+      case "{{OS}}" in
+        windows)
+          echo "powershell -Command Remove-Item -Force -Recurse -ErrorAction SilentlyContinue -Path"
+          ;;
+        *)
+          echo "rm -rf"
+          ;;
+      esac
+  MKDIR_CMD:
+    sh: |
+      case "{{OS}}" in
+        windows)
+          echo "powershell -Command New-Item -ItemType Directory -Force -Path"
+          ;;
+        *)
+          echo "mkdir -p"
+          ;;
+      esac
+  CHMOD_CMD:
+    sh: |
+      case "{{OS}}" in
+        windows)
+          echo "echo Skipping chmod on Windows..."
+          ;;
+        *)
+          echo "chmod +x scripts/*.sh"
+          ;;
+      esac
 
 tasks:
-  init:
-    desc: Initialize directory structure and set permissions
-    cmds:
-      - task: ensure-dirs
-      - task: set-permissions
-      - echo "Directory structure initialized"
-
-  ensure-dirs:  
-    internal: true  
-    cmds:  
-      - |  
-        {{if eq OS "windows"}}  
-          powershell.exe -NoProfile -Command "New-Item -ItemType Directory -Path '.\data\primary' -Force | Out-Null; Write-Host 'Created directory: .\data\primary'"  
-          powershell.exe -NoProfile -Command "New-Item -ItemType Directory -Path '.\data\replica' -Force | Out-Null; Write-Host 'Created directory: .\data\replica'"  
-          powershell.exe -NoProfile -Command "New-Item -ItemType Directory -Path '.\backups' -Force | Out-Null; Write-Host 'Created directory: .\backups'"  
-        {{else}}  
-          mkdir -p {{.DATA_DIR}}/{primary,replica} {{.SCRIPTS_DIR}}/{primary,replica} {{.BACKUP_DIR}}  
-        {{end}}  
-
-  set-permissions:  
-    internal: true  
-    cmds:  
-      - |  
-        {{if ne OS "windows"}}  
-          chmod +x {{.SCRIPTS_DIR}}/replica/00-init.sh  
-          chmod 777 {{.DATA_DIR}}/primary {{.DATA_DIR}}/replica  
-        {{end}}  
-
   start:
-    desc: Start PostgreSQL primary and replica servers
-    deps: [init]
+    desc: PostgreSQL 클러스터 시작
     cmds:
+      - '{{.MKDIR_CMD}} "{{.VOLUME_DIR}}/primary"'
+      - '{{.MKDIR_CMD}} "{{.VOLUME_DIR}}/replica"'
+      - '{{.CHMOD_CMD}}'
+      - docker compose down -v
       - docker compose up -d
-      - echo "PostgreSQL cluster is running"
+      - task: wait-for-db
 
   stop:
-    desc: Stop PostgreSQL servers
+    desc: PostgreSQL 클러스터 중단
     cmds:
       - docker compose down
-      - echo "PostgreSQL cluster stopped"
-
-  down:
-    desc: Stop PostgreSQL servers (alias for stop)
-    cmds:
-      - task: stop
-
-  restart:
-    desc: Restart PostgreSQL servers
-    cmds:
-      - task: stop
-      - task: start
 
   clean:
-    desc: Clean up all data and containers
+    desc: 데이터 폴더 삭제
     cmds:
       - docker compose down -v
+      - '{{.RM_CMD}} "{{.VOLUME_DIR}}"'
+
+  wait-for-db:
+    desc: DB 연결 대기
+    internal: true
+    cmds:
       - |
-        {{if eq OS "windows"}}
-          powershell -NoProfile -Command "
-          if (Test-Path '{{.DATA_DIR}}') {
-            Remove-Item '{{.DATA_DIR}}' -Recurse -Force
-            Write-Host 'Removed {{.DATA_DIR}}'
-          }
-          New-Item -ItemType Directory -Path '{{.DATA_DIR}}' -Force
-          Write-Host 'Created new {{.DATA_DIR}}'
-          "
-        {{else}}
-          rm -rf {{.DATA_DIR}}/primary/* {{.DATA_DIR}}/replica/*
-        {{end}}
-      - echo "Clean up completed"
+        echo "Waiting for Primary DB..."
+        for i in {1..30}; do
+          if docker exec postgres_primary pg_isready -U postgres > /dev/null 2>&1; then
+            echo "Primary DB is ready!"
+            break
+          fi
+          echo "Waiting... ($i/30)"
+          sleep 1
+        done
+      - |
+        echo "Waiting for Replica DB..."
+        for i in {1..30}; do
+          if docker exec postgres_replica pg_isready -U postgres > /dev/null 2>&1; then
+            echo "Replica DB is ready!"
+            break
+          fi
+          echo "Waiting... ($i/30)"
+          sleep 1
+        done
+
+  test-connection:
+    desc: DB 연결 테스트
+    cmds:
+      - echo "Testing Primary connection..."
+      - docker compose exec primary psql -U postgres -c "\l"
+      - echo "Testing Replica connection..."
+      - docker compose exec replica psql -U postgres -c "\l"
 
   logs:
-    desc: Show logs from all containers
+    desc: 모든 컨테이너 로그 출력
     cmds:
       - docker compose logs -f
 
-  logs-primary:
-    desc: Show logs from primary container
+  primary-logs:
+    desc: Primary 노드 로그 출력
     cmds:
-      - docker logs -f postgres_primary
+      - docker compose logs -f primary
 
-  logs-replica:
-    desc: Show logs from replica container
+  replica-logs:
+    desc: Replica 노드 로그 출력
     cmds:
-      - docker logs -f postgres_replica
-
-  attach-primary:
-    desc: Attach to primary PostgreSQL container
-    cmds:
-      - docker exec -it postgres_primary psql -U postgres
-
-  attach-replica:
-    desc: Attach to replica PostgreSQL container
-    cmds:
-      - docker exec -it postgres_replica psql -U postgres
+      - docker compose logs -f replica
 
   status:
     desc: Check replication status
@@ -113,55 +113,15 @@ tasks:
       - echo "Replication Status:"
       - docker exec postgres_primary psql -U postgres -c "SELECT * FROM pg_stat_replication;"
 
-  backup:
-    desc: Backup both primary and replica databases
-    dir: '{{.BACKUP_DIR}}'
-    vars:
-      TIMESTAMP: '{{now | date "2006-01-02T15-04-05"}}'
+  primary-sh:
+    desc: Primary 노드 쉘 접속
     cmds:
-      - |
-        {{if eq OS "windows"}}
-        powershell -Command "
-        $dirs = @('primary', 'replica')
-        foreach ($dir in $dirs) {
-          if (-not (Test-Path $dir)) {
-            New-Item -ItemType Directory -Path $dir -Force
-            Write-Host \"Created directory: $dir\"
-          }
-        }
-        "
-        {{else}}
-        mkdir -p primary replica
-        {{end}}
-      - echo "Backing up primary database..."
-      - docker exec postgres_primary pg_basebackup -D /tmp/backup -Ft -z -P
-      - docker cp postgres_primary:/tmp/backup/. primary/backup-{{.TIMESTAMP}}/
-      - echo "Backing up replica database..."
-      - docker exec postgres_replica pg_basebackup -D /tmp/backup -Ft -z -P
-      - docker cp postgres_replica:/tmp/backup/. replica/backup-{{.TIMESTAMP}}/
-      - echo "Backup completed at {{.TIMESTAMP}}"
+      - docker compose exec primary bash
 
-  monitor:
-    desc: Monitor replication lag and status
+  replica-sh:
+    desc: Replica 노드 쉘 접속
     cmds:
-      - |
-        {{if eq OS "windows"}}
-        powershell -NoProfile -Command "
-        while ($true) {
-          Clear-Host
-          Write-Host '=== Replication Status ==='
-          task status
-          Start-Sleep -Seconds 5
-        }
-        "
-        {{else}}
-        while true; do
-          clear
-          echo "=== Replication Status ==="
-          task status
-          sleep 5
-        done
-        {{end}}
+      - docker compose exec replica bash
 
   help:
     desc: Show this help
